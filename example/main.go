@@ -2,67 +2,76 @@ package main
 
 import (
 	"fmt"
+	"github.com/lristar/pool"
+	"math/rand"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
-
-	"github.com/silenceper/pool"
 )
+
+type Server struct {
+}
+
+func (s *Server) Close(v interface{}) error {
+	fmt.Println("关闭一个连接")
+	return nil
+}
+
+// Factory 生成连接的方法
+func (s *Server) Factory() (interface{}, error) {
+	pool.Info("创建了一个连接")
+	return s, nil
+}
+
+// Ping 检查连接是否有效的方法
+func (s *Server) Ping(interface{}) error {
+	pool.Info("ping了一下")
+	return nil
+}
+
+func handle(s interface{}) error {
+	pool.Info("处理了一次")
+	return nil
+}
 
 const addr string = "127.0.0.1:8080"
 
 func main() {
 	c := make(chan os.Signal)
-	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGUSR1, syscall.SIGUSR2)
-	go server()
+	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGALRM)
 	//等待tcp server启动
-	time.Sleep(2 * time.Second)
-	client()
-	fmt.Println("使用: ctrl+c 退出服务")
-	<-c
-	fmt.Println("服务退出")
-}
-
-func client() {
-
-	//factory 创建连接的方法
-	factory := func() (interface{}, error) { return net.Dial("tcp", addr) }
-
-	//close 关闭连接的方法
-	close := func(v interface{}) error { return v.(net.Conn).Close() }
-
-	//创建一个连接池： 初始化2，最大连接5，空闲连接数是4
-	poolConfig := &pool.Config{
-		InitialCap: 2,
-		MaxIdle:    4,
-		MaxCap:     5,
-		Factory:    factory,
-		Close:      close,
-		//连接最大空闲时间，超过该时间的连接 将会关闭，可避免空闲时连接EOF，自动失效的问题
-		IdleTimeout: 15 * time.Second,
-	}
-	p, err := pool.NewChannelPool(poolConfig)
+	p, err := pool.NewChannelPool(pool.Config{
+		InitialCap:  5,
+		MaxCap:      20,
+		Fac:         new(Server),
+		IdleTimeout: 200,
+	})
 	if err != nil {
-		fmt.Println("err=", err)
+		panic(err)
 	}
-
-	//从连接池中取得一个连接
-	v, err := p.Get()
-
-	//do something
-	//conn=v.(net.Conn)
-
-	//将连接放回连接池中
-	p.Put(v)
-
-	//释放连接池中的所有连接
-	//p.Release()
-
-	//查看当前连接中的数量
-	current := p.Len()
-	fmt.Println("len=", current)
+	go func() {
+		for {
+			time.Sleep(time.Second)
+			pool.Info("现在积极连接：", p.GetActive())
+		}
+	}()
+	for i := 0; i < 10000; i++ {
+		for j := 0; j < 6; j++ {
+			go func() {
+				rand.Seed(time.Now().UnixNano())
+				t := rand.Intn(8) + 1
+				pool.Info("t is ", t)
+				time.Sleep(time.Duration(t) * time.Second)
+				p.Handle(handle)
+			}()
+		}
+		time.Sleep(time.Second * 10)
+	}
+	pool.Info("使用: ctrl+c 退出服务")
+	defer func() { pool.Info("服务退出") }()
+	<-c
 }
 
 func server() {
