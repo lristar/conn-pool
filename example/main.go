@@ -22,7 +22,6 @@ func Factory() (pool.IConn, error) {
 	return new(Conn), nil
 }
 
-// todo 这里的interface如何解决
 // Ping 检查连接是否有效的方法
 func (c *Conn) Ping() error {
 	return nil
@@ -42,7 +41,6 @@ const addr string = "127.0.0.1:8080"
 func main() {
 	c := make(chan os.Signal)
 	signal.Notify(c, os.Interrupt, os.Kill, syscall.SIGTERM, syscall.SIGALRM)
-	//等待tcp server启动
 	p, err := pool.NewChannelPool(pool.Config{
 		InitialCap:  5,
 		MaxCap:      20,
