@@ -1,10 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"github.com/lristar/pool"
 	"math/rand"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -78,22 +76,4 @@ func main() {
 	pool.Info("使用: ctrl+c 退出服务")
 	defer func() { pool.Info("服务退出") }()
 	<-c
-}
-
-func server() {
-	l, err := net.Listen("tcp", addr)
-	if err != nil {
-		fmt.Println("Error listening: ", err)
-		os.Exit(1)
-	}
-	defer l.Close()
-	fmt.Println("Listening on ", addr)
-	for {
-		conn, err := l.Accept()
-		if err != nil {
-			fmt.Println("Error accepting: ", err)
-		}
-		fmt.Printf("Received message %s -> %s \n", conn.RemoteAddr(), conn.LocalAddr())
-		//go handleRequest(conn)
-	}
 }
