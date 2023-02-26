@@ -144,7 +144,6 @@ func (c *channelPool) put(conn *idleConn) error {
 	select {
 	case c.conns <- conn:
 	default:
-		Info("管道满了，删除这个连接")
 		return c.closeOne(conn)
 	}
 	return nil
