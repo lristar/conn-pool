@@ -1,12 +1,17 @@
 package main
 
 import (
-	"github.com/lristar/pool"
+	"github.com/lristar/conn-pool"
 	"math/rand"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
+)
+
+var (
+	num int32
 )
 
 type Conn struct {
@@ -14,19 +19,16 @@ type Conn struct {
 
 // Factory 生成连接的方法
 func Factory() (pool.IConn, error) {
-	pool.Info("创建了一个连接")
 	return new(Conn), nil
 }
 
 // todo 这里的interface如何解决
 // Ping 检查连接是否有效的方法
 func (c *Conn) Ping() error {
-	pool.Info("Ping 这个连接")
 	return nil
 }
 
 func (c *Conn) Close() error {
-	pool.Info("Close 关闭了这个连接")
 	return nil
 }
 
@@ -55,6 +57,8 @@ func main() {
 			time.Sleep(time.Second)
 			i, j := p.GetActive()
 			pool.Infof("现在积极连接：%d, 当前管道剩余连接数%d", i, j)
+
+			pool.Infof("num is %d", atomic.LoadInt32(&num))
 		}
 	}()
 	for i := 0; i < 10000; i++ {
@@ -64,6 +68,7 @@ func main() {
 		for j := 0; j < t; j++ {
 			go func() {
 				if err := p.Handle(func(conn pool.IConn) error {
+					atomic.AddInt32(&num, 1)
 					_ = conn.Use()
 					return nil
 				}); err != nil {

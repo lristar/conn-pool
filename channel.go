@@ -106,38 +106,15 @@ func (c *channelPool) Handle(handle func(conn IConn) error) error {
 	for {
 		wrapConn := c.GetConn()
 		if wrapConn != nil {
-			Info("获取旧连接")
 			if c.isRelease(wrapConn) {
 				continue
 			}
 			cc = wrapConn
 			goto end
 		} else {
-			c.mu.RLock()
-			connectionNum := atomic.LoadInt32(&c.openingConns)
-			c.mu.RUnlock()
-			Infof("openConn %v %v", connectionNum, c.maxActive)
-			if connectionNum >= c.maxActive {
-				// 如果达到最大数量的队列了，就等待是否有回收的可以用
-				Info("等待旧连接")
-				cc, err = c.factory(true)
-				if err != nil {
-					return err
-				}
-			} else {
-				c.mu.RLock()
-				connectionNum = atomic.LoadInt32(&c.openingConns)
-				c.mu.RUnlock()
-				if connectionNum < c.maxActive {
-					Info("获取新连接")
-					cc, err = c.factory(false)
-				} else {
-					Info("等待旧连接")
-					cc, err = c.factory(true)
-				}
-				if err != nil {
-					return err
-				}
+			cc, err = c.factory(false)
+			if err != nil {
+				return err
 			}
 			goto end
 		}
@@ -148,8 +125,6 @@ end:
 }
 
 func (c *channelPool) GetConn() (conn *idleConn) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	select {
 	case conn = <-c.conns:
 		return
@@ -163,10 +138,11 @@ func (c *channelPool) put(conn *idleConn) error {
 	if conn == nil {
 		return errors.New("connection is nil. rejecting")
 	}
+	// 续费
+	conn.t = time.Now()
 	// 得判断管道是否满了
 	select {
 	case c.conns <- conn:
-		Info("归还一个连接")
 	default:
 		Info("管道满了，删除这个连接")
 		return c.closeOne(conn)
@@ -213,41 +189,40 @@ func (c *channelPool) ping(conn *idleConn) error {
 
 // 获取连接，如果没有就重建新连接（如果满了就等待连接池释放的连接，超过十秒报错）
 func (c *channelPool) factory(wait bool) (*idleConn, error) {
-	tc := time.NewTicker(DelayTime10s)
 	if wait {
+		tc := time.NewTicker(DelayTime10s)
 		for {
 			select {
-			case conn, ok := <-c.conns:
-				if ok {
-					if c.isRelease(conn) {
-						continue
-					} else {
-						return conn, nil
-					}
+			case conn := <-c.conns:
+				if c.isRelease(conn) {
+					continue
 				} else {
-					return nil, ErrConnClosed
+					return conn, nil
 				}
-				// 超时退出
 			case <-tc.C:
 				tc.Stop()
 				return nil, ErrGetConnTimeOut
 			}
 		}
 	} else {
-		conn, err := c.fac()
-		if err != nil {
-			return nil, err
-		}
 		c.mu.Lock()
 		var idle *idleConn
-		if c.openingConns < c.InitialCap {
-			idle = newIdleConn(conn, true)
+		if c.openingConns < c.maxActive {
+			conn, err := c.fac()
+			if err != nil {
+				return nil, err
+			}
+			if c.openingConns < c.InitialCap {
+				idle = newIdleConn(conn, true)
+			} else {
+				idle = newIdleConn(conn, false)
+			}
 		} else {
-			idle = newIdleConn(conn, false)
+			c.mu.Unlock()
+			return c.factory(true)
 		}
-		defer c.mu.Unlock()
-		defer atomic.AddInt32(&c.openingConns, 1)
-		// 保证含有最少连接
+		atomic.AddInt32(&c.openingConns, 1)
+		c.mu.Unlock()
 		return idle, nil
 	}
 }
