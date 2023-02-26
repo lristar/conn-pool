@@ -11,28 +11,29 @@ import (
 	"time"
 )
 
-type Server struct {
-}
-
-func (s *Server) Close(v interface{}) error {
-	fmt.Println("关闭一个连接")
-	return nil
+type Conn struct {
 }
 
 // Factory 生成连接的方法
-func (s *Server) Factory() (interface{}, error) {
+func Factory() (pool.IConn, error) {
 	pool.Info("创建了一个连接")
-	return s, nil
+	return new(Conn), nil
 }
 
+// todo 这里的interface如何解决
 // Ping 检查连接是否有效的方法
-func (s *Server) Ping(interface{}) error {
-	pool.Info("ping了一下")
+func (c *Conn) Ping() error {
+	pool.Info("Ping 这个连接")
 	return nil
 }
 
-func handle(s interface{}) error {
-	pool.Info("处理了一次")
+func (c *Conn) Close() error {
+	pool.Info("Close 关闭了这个连接")
+	return nil
+}
+
+func (c *Conn) Use() error {
+	pool.Info("Use 调用了这个连接")
 	return nil
 }
 
@@ -45,8 +46,8 @@ func main() {
 	p, err := pool.NewChannelPool(pool.Config{
 		InitialCap:  5,
 		MaxCap:      20,
-		Fac:         new(Server),
-		IdleTimeout: 200,
+		Fac:         Factory,
+		IdleTimeout: 20,
 	})
 	if err != nil {
 		panic(err)
@@ -54,20 +55,25 @@ func main() {
 	go func() {
 		for {
 			time.Sleep(time.Second)
-			pool.Info("现在积极连接：", p.GetActive())
+			i, j := p.GetActive()
+			pool.Infof("现在积极连接：%d, 当前管道剩余连接数%d", i, j)
 		}
 	}()
 	for i := 0; i < 10000; i++ {
-		for j := 0; j < 6; j++ {
+		rand.Seed(time.Now().UnixNano())
+		t := rand.Intn(50) + 1
+		pool.Info("t is ", t)
+		for j := 0; j < t; j++ {
 			go func() {
-				rand.Seed(time.Now().UnixNano())
-				t := rand.Intn(8) + 1
-				pool.Info("t is ", t)
-				time.Sleep(time.Duration(t) * time.Second)
-				p.Handle(handle)
+				if err := p.Handle(func(conn pool.IConn) error {
+					_ = conn.Use()
+					return nil
+				}); err != nil {
+					pool.Errorf("err is %v", err)
+				}
 			}()
 		}
-		time.Sleep(time.Second * 10)
+		time.Sleep(time.Second * 15)
 	}
 	pool.Info("使用: ctrl+c 退出服务")
 	defer func() { pool.Info("服务退出") }()

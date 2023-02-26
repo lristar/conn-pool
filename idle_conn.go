@@ -3,12 +3,12 @@ package pool
 import "time"
 
 type idleConn struct {
-	conn       interface{}
+	conn       IConn
 	t          time.Time
 	isDuration bool
 }
 
-func newIdleConn(conn interface{}, isDuration bool) *idleConn {
+func newIdleConn(conn IConn, isDuration bool) *idleConn {
 	return &idleConn{
 		conn:       conn,
 		t:          time.Now(),
@@ -35,7 +35,7 @@ func (i *idleConn) renew() {
 	i.t = time.Now()
 }
 
-func (i *idleConn) Handle(h func(interface{}) error) error {
+func (i *idleConn) Handle(h func(conn IConn) error) error {
 	defer i.renew()
 	return h(i.conn)
 }

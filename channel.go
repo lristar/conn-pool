@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 	//"reflect"
 )
@@ -20,22 +21,25 @@ var (
 	DelayTime10s = time.Second * 10
 )
 
-type IFactory interface {
-	// Factory 生成连接的方法
-	Factory() (interface{}, error)
-	// Close 关闭连接的方法
-	Close(interface{}) error
-	// Ping 检查连接是否有效的方法
-	Ping(interface{}) error
-}
+type (
+	IConn interface {
+		// Close 关闭连接的方法
+		Close() error
+		// Ping 检查连接是否有效的方法
+		Ping() error
+		// Use 应用这个连接
+		Use() error
+	}
+	Fac func() (IConn, error)
+)
 
 // Config 连接池相关配置
 type Config struct {
 	//连接池中拥有的最小连接数
-	InitialCap int
+	InitialCap int32
 	//最大并发存活连接数
-	MaxCap int
-	Fac    IFactory
+	MaxCap int32
+	Fac    Fac
 	//连接最大空闲时间，超过该事件则将失效
 	IdleTimeout time.Duration
 }
@@ -44,11 +48,11 @@ type Config struct {
 type channelPool struct {
 	Config
 	mu                       sync.RWMutex
-	fac                      IFactory
+	fac                      Fac
 	conns                    chan *idleConn
 	idleTimeout, waitTimeOut time.Duration
-	maxActive                int
-	openingConns             int
+	maxActive                int32
+	openingConns             int32
 }
 
 // NewChannelPool 初始化连接
@@ -70,7 +74,7 @@ func NewChannelPool(poolConfig Config) (*channelPool, error) {
 		openingConns: 0,
 	}
 
-	for i := 0; i < poolConfig.InitialCap; i++ {
+	for i := 0; i < int(poolConfig.InitialCap); i++ {
 		conn, err := c.factory(false)
 		if err != nil {
 			c.Release()
@@ -94,49 +98,64 @@ func (c *channelPool) getConns() chan *idleConn {
 }
 
 // Handle 从pool内获取连接使用同时放回
-func (c *channelPool) Handle(handle func(interface{}) error) error {
-	conns := c.getConns()
-	if conns == nil {
-		return ErrClosed
-	}
+func (c *channelPool) Handle(handle func(conn IConn) error) error {
 	var (
 		cc  *idleConn // 单个连接
 		err error
 	)
 	for {
-		select {
-		case wrapConn, ok := <-conns:
-			if !ok {
-				return ErrClosed
-			}
+		wrapConn := c.GetConn()
+		if wrapConn != nil {
+			Info("获取旧连接")
 			if c.isRelease(wrapConn) {
 				continue
 			}
 			cc = wrapConn
-			goto run
-		default:
+			goto end
+		} else {
 			c.mu.RLock()
-			connectionNum := c.openingConns
+			connectionNum := atomic.LoadInt32(&c.openingConns)
 			c.mu.RUnlock()
 			Infof("openConn %v %v", connectionNum, c.maxActive)
 			if connectionNum >= c.maxActive {
 				// 如果达到最大数量的队列了，就等待是否有回收的可以用
+				Info("等待旧连接")
 				cc, err = c.factory(true)
 				if err != nil {
 					return err
 				}
 			} else {
-				cc, err = c.factory(false)
+				c.mu.RLock()
+				connectionNum = atomic.LoadInt32(&c.openingConns)
+				c.mu.RUnlock()
+				if connectionNum < c.maxActive {
+					Info("获取新连接")
+					cc, err = c.factory(false)
+				} else {
+					Info("等待旧连接")
+					cc, err = c.factory(true)
+				}
 				if err != nil {
 					return err
 				}
 			}
-			goto run
+			goto end
 		}
 	}
-run:
+end:
 	defer c.put(cc)
-	return handle(cc)
+	return handle(cc.conn)
+}
+
+func (c *channelPool) GetConn() (conn *idleConn) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	select {
+	case conn = <-c.conns:
+		return
+	default:
+		return
+	}
 }
 
 // Put 将连接放回pool中 这个集成到get里面
@@ -144,19 +163,12 @@ func (c *channelPool) put(conn *idleConn) error {
 	if conn == nil {
 		return errors.New("connection is nil. rejecting")
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conns == nil {
-		return c.closeOne(conn)
-	}
-	num := c.openingConns
-	if num >= c.maxActive {
-		return c.closeOne(conn)
-	}
 	// 得判断管道是否满了
 	select {
 	case c.conns <- conn:
+		Info("归还一个连接")
 	default:
+		Info("管道满了，删除这个连接")
 		return c.closeOne(conn)
 	}
 	return nil
@@ -169,8 +181,8 @@ func (c *channelPool) closeOne(conn *idleConn) error {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.openingConns--
-	return c.fac.Close(conn.conn)
+	atomic.AddInt32(&c.openingConns, -1)
+	return conn.conn.Close()
 }
 
 // ReleaseOne 判断如果需要释放就释放
@@ -196,7 +208,7 @@ func (c *channelPool) ping(conn *idleConn) error {
 	if conn == nil {
 		return errors.New("connection is nil. rejecting")
 	}
-	return c.fac.Ping(conn.conn)
+	return conn.conn.Ping()
 }
 
 // 获取连接，如果没有就重建新连接（如果满了就等待连接池释放的连接，超过十秒报错）
@@ -222,7 +234,7 @@ func (c *channelPool) factory(wait bool) (*idleConn, error) {
 			}
 		}
 	} else {
-		conn, err := c.fac.Factory()
+		conn, err := c.fac()
 		if err != nil {
 			return nil, err
 		}
@@ -233,8 +245,8 @@ func (c *channelPool) factory(wait bool) (*idleConn, error) {
 		} else {
 			idle = newIdleConn(conn, false)
 		}
-		defer func() { c.openingConns++ }()
 		defer c.mu.Unlock()
+		defer atomic.AddInt32(&c.openingConns, 1)
 		// 保证含有最少连接
 		return idle, nil
 	}
@@ -243,31 +255,20 @@ func (c *channelPool) factory(wait bool) (*idleConn, error) {
 // Release 释放连接池中所有连接 不关闭管道
 func (c *channelPool) Release() {
 	c.mu.Lock()
-	conns := c.conns
-	c.conns = nil
-	closeFun := c.fac.Close
-	c.mu.Unlock()
-	if conns == nil {
-		return
-	}
-	for wrapConn := range conns {
-		_ = closeFun(wrapConn.conn)
+	defer c.mu.Unlock()
+
+	for wrapConn := range c.conns {
+		_ = wrapConn.conn.Close()
 	}
 }
 
 // Close 关闭管道并且释放连接
 func (c *channelPool) Close() error {
 	c.mu.Lock()
-	conns := c.conns
-	c.conns = nil
-	closeFun := c.fac.Close
-	c.mu.Unlock()
-	if conns == nil {
-		return nil
-	}
+	defer c.mu.Unlock()
 	close(c.conns)
-	for wrapConn := range conns {
-		_ = closeFun(wrapConn.conn)
+	for wrapConn := range c.conns {
+		_ = wrapConn.conn.Close()
 	}
 	return nil
 }
@@ -277,8 +278,6 @@ func (c *channelPool) Len() int {
 	return len(c.getConns())
 }
 
-func (c *channelPool) GetActive() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.openingConns
+func (c *channelPool) GetActive() (int32, int) {
+	return c.openingConns, len(c.conns)
 }
