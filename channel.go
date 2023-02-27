@@ -19,6 +19,9 @@ var (
 	ErrClosed = errors.New("pool is closed")
 	// 超时时间
 	DelayTime10s = time.Second * 10
+
+	// 连接池
+	pool *channelPool
 )
 
 type (
@@ -28,7 +31,7 @@ type (
 		// Ping 检查连接是否有效的方法
 		Ping() error
 		// Use 应用这个连接
-		Use() error
+		Use(interface{}) error
 	}
 	Fac func() (IConn, error)
 )
@@ -65,7 +68,7 @@ func NewChannelPool(poolConfig Config) (*channelPool, error) {
 		return nil, fmt.Errorf("没有工厂，无法创建")
 	}
 
-	c := &channelPool{
+	pool = &channelPool{
 		Config:       poolConfig,
 		conns:        make(chan *idleConn, poolConfig.MaxCap),
 		fac:          poolConfig.Fac,
@@ -75,18 +78,25 @@ func NewChannelPool(poolConfig Config) (*channelPool, error) {
 	}
 
 	for i := 0; i < int(poolConfig.InitialCap); i++ {
-		conn, err := c.factory(false)
+		conn, err := pool.factory(false)
 		if err != nil {
-			c.Release()
+			pool.Release()
 			return nil, fmt.Errorf("factory is not able to fill the pool: %s", err)
 		}
-		if err = c.put(conn); err != nil {
+		if err = pool.put(conn); err != nil {
 			// 如果入管道失败就直接创建失败
-			_ = c.Close()
+			_ = pool.Close()
 			return nil, err
 		}
 	}
-	return c, nil
+	return pool, nil
+}
+
+func GetPool() (*channelPool, error) {
+	if pool == nil {
+		return nil, fmt.Errorf("pool为空")
+	}
+	return pool, nil
 }
 
 // getConns 获取所有连接

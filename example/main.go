@@ -31,7 +31,7 @@ func (c *Conn) Close() error {
 	return nil
 }
 
-func (c *Conn) Use() error {
+func (c *Conn) Use(v interface{}) error {
 	pool.Info("Use 调用了这个连接")
 	return nil
 }
@@ -62,12 +62,12 @@ func main() {
 	for i := 0; i < 10000; i++ {
 		rand.Seed(time.Now().UnixNano())
 		t := rand.Intn(50) + 1
-		pool.Info("t is ", t)
 		for j := 0; j < t; j++ {
 			go func() {
+				p, _ := pool.GetPool()
 				if err := p.Handle(func(conn pool.IConn) error {
 					atomic.AddInt32(&num, 1)
-					_ = conn.Use()
+					_ = conn.Use("adfdafsf")
 					return nil
 				}); err != nil {
 					pool.Errorf("err is %v", err)
