@@ -11,7 +11,7 @@ go get github.com/lristar/conn-pool
 ```go
 package main
 import (
- pool "github.com/lristar/conn-pool"
+	pool "github.com/lristar/conn-pool"
 )
 
 
@@ -32,22 +32,23 @@ func (c *Conn) Close() error {
 	return nil
 }
 
-func (c *Conn) Use() error {
+func (c *Conn) Use(interface{}) error {
 	pool.Info("Use 调用了这个连接")
 	return nil
 }
-
-p, err := pool.NewChannelPool(pool.Config{
+func main() {
+	p, err := pool.NewChannelPool(pool.Config{
 		InitialCap:  5,
 		MaxCap:      20,
 		Fac:         Factory,
 		IdleTimeout: 20,
 	})
-if err := p.Handle(func(conn pool.IConn) error {
-					atomic.AddInt32(&num, 1)
-					_ = conn.Use()
-					return nil
-				}); err != nil {
-					pool.Errorf("err is %v", err)
-				}
+	if err := p.Handle(func(conn pool.IConn) error {
+		atomic.AddInt32(&num, 1)
+		_ = conn.Use("hahaah")
+		return nil
+	}); err != nil {
+		pool.Errorf("err is %v", err)
+	}
+}
 ```
