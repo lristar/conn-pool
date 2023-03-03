@@ -37,14 +37,12 @@ func (c *Conn) Use(interface{}) error {
 	return nil
 }
 func main() {
-	p, err := pool.NewChannelPool(pool.Config{
-		InitialCap:  5,
-		MaxCap:      20,
-		Fac:         Factory,
-		IdleTimeout: 20,
-	})
+	p, err := pool.InitPool(pool.SetFactory(Factory))
+	if err!=nil{
+		pool.Errorf("err is %v", err)
+		return 
+    }
 	if err := p.Handle(func(conn pool.IConn) error {
-		atomic.AddInt32(&num, 1)
 		_ = conn.Use("hahaah")
 		return nil
 	}); err != nil {
