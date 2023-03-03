@@ -35,7 +35,7 @@ func (i *idleConn) renew() {
 	i.t = time.Now()
 }
 
-func (i *idleConn) Handle(h func(conn IConn) error) error {
+func (i *idleConn) handle(h func(conn IConn) error) error {
 	defer i.renew()
 	return h(i.conn)
 }

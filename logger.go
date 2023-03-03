@@ -1,9 +1,7 @@
 package pool
 
 import (
-	"fmt"
 	log "github.com/sirupsen/logrus"
-	"runtime"
 )
 
 var (
@@ -23,7 +21,8 @@ var (
 )
 
 func init() {
-	log.SetFormatter(&log.JSONFormatter{})
+	log.SetReportCaller(true)
+	log.SetFormatter(&log.JSONFormatter{TimestampFormat: "2006-01-02 15:04:05"})
 	Info = log.Info
 	Infof = log.Infof
 	APIInfo = log.WithFields(log.Fields{
@@ -45,20 +44,4 @@ func init() {
 	Warnf = errorLog.Warnf
 	Panic = errorLog.Panic
 	Panicf = errorLog.Panicf
-}
-
-// ErrorStack 用于打印
-func ErrorStack() {
-	var buf [4096]byte
-	n := runtime.Stack(buf[:], false)
-	fmt.Println(string(buf[:n]))
-}
-
-// GinLog 打印gin请求的日志
-func GinLog(method, requestURI, body string) {
-	log.WithFields(log.Fields{
-		"type":   "GIN",
-		"method": method,
-		"uri":    requestURI,
-		"body":   body}).Info()
 }
