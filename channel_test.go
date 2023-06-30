@@ -2,7 +2,6 @@ package pool
 
 import (
 	"github.com/stretchr/testify/assert"
-	"gitlab.gf.com.cn/hk-common/go-tool/server/logger"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -167,7 +166,6 @@ func TestGetConnWait(t *testing.T) {
 				defer w.Done()
 				return conn.Use("hahah")
 			}); err != nil {
-				logger.Error(err)
 				aet.Error(err)
 			}
 		}()
